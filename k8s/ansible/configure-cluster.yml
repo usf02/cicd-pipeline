@@ -1,0 +1,64 @@
+---
+- name: Configure EKS cluster namespaces and tooling
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    cluster_name: "cicd-pipeline-cluster"
+    region: "eu-central-1"
+    namespaces:
+      - dev
+      - staging
+      - prod
+
+  tasks:
+    - name: Update kubeconfig for EKS cluster
+      command: >
+        aws eks update-kubeconfig
+        --region {{ region }}
+        --name {{ cluster_name }}
+      register: kubeconfig_result
+
+    - name: Verify cluster connection
+      command: kubectl cluster-info
+      register: cluster_info
+      failed_when: cluster_info.rc != 0
+
+    - name: Create application namespaces
+      command: kubectl create namespace {{ item }}
+      loop: "{{ namespaces }}"
+      ignore_errors: true
+
+    - name: Verify namespaces exist
+      command: kubectl get namespace {{ item }}
+      loop: "{{ namespaces }}"
+      register: namespace_check
+
+    - name: Install Helm if not present
+      command: helm version
+      register: helm_check
+      failed_when: false
+
+    - name: Add stable Helm repository
+      command: helm repo add stable https://charts.helm.sh/stable
+      when: helm_check.rc == 0
+
+    - name: Update Helm repositories
+      command: helm repo update
+
+    - name: Create ECR image pull secret for each namespace
+      shell: |
+        kubectl create secret docker-registry ecr-secret \
+          --docker-server={{ ecr_registry }} \
+          --docker-username=AWS \
+          --docker-password=$(aws ecr get-login-password --region {{ region }}) \
+          --namespace={{ item }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      loop: "{{ namespaces }}"
+      vars:
+        ecr_registry: "{{ lookup('env', 'ECR_REGISTRY') }}"
+
+    - name: Print cluster summary
+      debug:
+        msg: "Cluster {{ cluster_name }} configured with namespaces: {{ namespaces }}"
