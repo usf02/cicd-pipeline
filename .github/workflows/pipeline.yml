@@ -1,0 +1,146 @@
+name: CI/CD promotion pipeline
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: eu-central-1
+  CLUSTER_NAME: cicd-pipeline-cluster
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ secrets.ECR_REGISTRY }}/cicde-pipeline:${{ steps.meta.outputs.tag }} .
+          docker push ${{ secrets.ECR_REGISTRY }}/cicd-pipeline:${{ steps.meta.outputs.tag }}
+
+  deploy-dev:
+    name: Deploy to dev
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout code
+        used: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ end.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: Deploy to dev
+        run: |
+          helm upgrade --install cicd-pipeline-app ./k8s/helm/cicd-pipeline-app --namespace dev --values ./k8s/helm/values-dev.yaml \
+          --set image.repository=${{ secrets.ECR_REGISTRY }}/cicd-pipeline --set image.tag=${{ need.build-and-test.ouputs.image_tag }} --wait
+
+      - name: Rune smoke tests
+        run: |
+          kubectl wait --for=condition=ready pod -l app=cicd-pipeline-app -n dev --timeout=120s
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.CLUSTER_NAME }}
+
+      - name: Deploy to staging
+        run: |
+          helm upgrade --install cicd-pipeline-app ./k8s/helm/cicd-pipeline-app \
+            --namespace staging \
+            --values ./k8s/helm/values-staging.yaml \
+            --set image.repository=${{ secrets.ECR_REGISTRY }}/cicd-pipeline \
+            --set image.tag=${{ needs.build-and-test.outputs.image_tag }} \
+            --wait
+
+      - name: Run integration tests
+        run: |
+          kubectl wait --for=condition=ready pod \
+            -l app=cicd-pipeline-app \
+            -n staging \
+            --timeout=120s
+
+  deploy-prod:
+    name: Deploy to prod
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.CLUSTER_NAME }}
+
+      - name: Deploy to prod
+        run: |
+          helm upgrade --install cicd-pipeline-app ./k8s/helm/cicd-pipeline-app \
+            --namespace prod \
+            --values ./k8s/helm/values-prod.yaml \
+            --set image.repository=${{ secrets.ECR_REGISTRY }}/cicd-pipeline \
+            --set image.tag=${{ needs.build-and-test.outputs.image_tag }} \
+            --wait
