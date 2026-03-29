@@ -8,6 +8,9 @@ env:
   AWS_REGION: eu-central-1
   CLUSTER_NAME: cicd-pipeline-cluster
 
+permissions:
+  id-token: write
+
 jobs:
   build-and-test:
     name: Build and test
