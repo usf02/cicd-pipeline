@@ -44,6 +44,10 @@
       command: helm repo add stable https://charts.helm.sh/stable
       when: helm_check.rc == 0
 
+    - name: Add prometheus community helm repo
+      command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      ignore_errors: true
+
     - name: Update Helm repositories
       command: helm repo update
 
@@ -62,3 +66,13 @@
     - name: Print cluster summary
       debug:
         msg: "Cluster {{ cluster_name }} configured with namespaces: {{ namespaces }}"
+
+    - name: Install kube-prometheus-stack
+      command: >
+        helm upgrade --install kube-prometheus-stack
+        prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --create-namespace
+        --set grafana.adminPassword=admin123
+        --set-file grafana.dashboards.default.pipeline-overview.json=k8s/grafana/pipeline-environments-dashboard.json
+        --wait
