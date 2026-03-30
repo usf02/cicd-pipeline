@@ -95,6 +95,10 @@ resource "aws_eks_cluster" "main" {
   version  = var.cluster_version
   role_arn = aws_iam_role.eks_cluster.arn
 
+  access_config {
+	authentication_mode = "API"
+  }
+
   vpc_config {
     subnet_ids = aws_subnet.public[*].id
   }
@@ -104,6 +108,11 @@ resource "aws_eks_cluster" "main" {
   tags = {
     Environment = var.environment
   }
+}
+
+resource "aws_eks_access_entry" "cicd-pipeline_role" {
+  cluster_name = aws_eks_cluster.main.name
+  principal_arn = var.aws_iam_role
 }
 
 resource "aws_iam_role" "eks_nodes" {
