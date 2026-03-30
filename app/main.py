@@ -4,7 +4,7 @@ import os
 app = Flask(__name__)
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
-VERSION = os.getenv("VERSION", "1.0.0")
+VERSION = os.getenv("VERSION", "2.0.0")
 
 @app.route("/")
 def hello():
